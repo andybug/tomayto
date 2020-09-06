@@ -1,10 +1,83 @@
-/* timer
- * FIXME
- */
-
+use std::time::{Duration, Instant, SystemTime};
+use std::result::Result;
 use std::error::Error;
 use std::fmt;
-use std::time::{Duration, Instant, SystemTime};
+
+mod http;
+// pub mod messages;
+
+// use tokio::time::delay_for;
+use tokio::sync::mpsc;
+use tokio::runtime;
+// use tokio::signal;
+
+// #[tokio::main]
+// pub async fn main() -> Result<(), ()> {
+//     println!("tomaytod");
+//     // let t = Timer::new(Duration::new(60, 0));
+//     // println!("elapsed {}", t.elapsed_secs());
+//     tokio::spawn(async move {
+//         tick().await;
+//     });
+
+//     loop {
+//         delay_for(Duration::from_millis(1_000)).await;
+//     }
+//     Ok(())
+// }
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut rt = runtime::Builder::new()
+        .basic_scheduler()
+        .enable_all()
+        .build()?;
+
+    rt.block_on(async {
+        let (tx, mut rx) = mpsc::channel(32);
+
+        tokio::spawn(async {
+            http::serve_api(tx).await;
+        });
+
+        println!("here");
+        // let mut tx2 = tx.clone();
+
+        // tokio::spawn(async move {
+        //     tick(tx).await;
+        // });
+
+        // tokio::spawn(async move {
+        //     signal::ctrl_c().await.unwrap();
+        //     tx2.send(String::from("ctrl-c")).await.unwrap();
+        // });
+
+        while let Some(msg) = rx.recv().await {
+            println!("message = {}", msg);
+            // match msg {
+            //     messages::TomaytoMessage::TimerStatusRequest(id) => println!("TimerStatusRequest"),
+            //     _ => (),
+            // }
+        }
+    });
+
+    Ok(())
+}
+
+// async fn tick(mut tx: mpsc::Sender<String>) {
+//     let mut t = Timer::new(Duration::new(60, 0));
+//     loop {
+//         delay_for(Duration::from_millis(1_000)).await;
+//         t.tick();
+//         tx.send(String::from("tick")).await.unwrap();
+//     }
+// }
+
+//  _   _
+// | |_(_)_ __ ___   ___ _ __
+// | __| | '_ ` _ \ / _ \ '__|
+// | |_| | | | | | |  __/ |
+//  \__|_|_| |_| |_|\___|_|
+//
 
 #[derive(Debug)]
 pub struct TimerError {
@@ -149,7 +222,7 @@ mod tests {
     use std::thread::sleep;
 
     #[test]
-    fn start_initial_state() {
+    fn timer_start_initial_state() {
         let mut t = Timer::new(Duration::new(60, 0));
         let init_interval = t.interval_start;
         assert_eq!(t.state, TimerState::Initial);
@@ -161,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn start_fail_other_states() {
+    fn timer_start_fail_other_states() {
         let mut t = Timer::new(Duration::new(60, 0));
 
         t.state = TimerState::Running;
@@ -184,7 +257,7 @@ mod tests {
     }
 
     #[test]
-    fn start_and_stop() {
+    fn timer_start_and_stop() {
         let mut t = Timer::new(Duration::new(60, 0));
         t.set_state(TimerState::Running).unwrap();
         sleep(Duration::new(1, 0));
@@ -197,7 +270,7 @@ mod tests {
     }
 
     #[test]
-    fn complete() {
+    fn timer_complete() {
         let mut t = Timer::new(Duration::new(0, 500_000_000));
         t.set_state(TimerState::Running).unwrap();
         sleep(Duration::new(1, 0));
