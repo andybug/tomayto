@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 tokio = { version = "0.2", features = ["full"] }
 warp = "0.2"
+serde = { version = "1.0.115", features = ["derive"] }
