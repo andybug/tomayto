@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::result::Result;
 use std::time::Duration;
+use std::vec::Vec;
 
 // use tokio::time::delay_for;
 use tokio::sync::{mpsc, oneshot};
@@ -30,15 +31,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         //     tx2.send(String::from("ctrl-c")).await.unwrap();
         // });
 
-        let mut timer = timer::Timer::new(0, String::from("default"), Duration::new(1 * 60, 0));
-        timer.set_state(timer::TimerState::Running).unwrap();
+        let mut timers = Vec::new();
+        timers.push(Some(timer::Timer::new(0, String::from("default"), Duration::new(1 * 60, 0))));
 
         while let Some(msg) = rx.recv().await {
-            timer.tick();
-            println!("timer elapsed = {}", timer.elapsed.as_secs());
             match msg {
-                msg::Message::ListTimers(tx) => list_timers(tx, &timer),
-                msg::Message::GetTimer(tx, id) => get_timer(tx, &timer, id),
+                msg::Message::ListTimers(tx) => list_timers(tx, &timers),
+                msg::Message::GetTimer(tx, id) => get_timer(tx, &timers, id),
                 _ => println!("main: unknown message"),
             }
         }
@@ -47,21 +46,31 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn list_timers(tx: oneshot::Sender<msg::Message>, timers: &timer::Timer) {
-    let mut vec = std::vec::Vec::new();
-    vec.push(timers.clone());
+fn list_timers(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>) {
+    let mut vec = Vec::new();
+
+    for timer in timers {
+        match timer {
+            Some(t) => vec.push(t.clone()),
+            None => (),
+        }
+    }
+
     if let Err(_) = tx.send(msg::Message::Timers(vec)) {
         println!("error sending Timers message");
     }
 }
 
-fn get_timer(tx: oneshot::Sender<msg::Message>, timer: &timer::Timer, id: u16) {
+fn get_timer(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>, id: u16) {
     let message: msg::Message;
 
-    if id != 0 {
-        message = msg::Message::Error(format!("timer {} does not exist", id));
+    if let Some(index) = timers.get(usize::from(id)) {
+        match index {
+            Some(timer) => message = msg::Message::Timer(timer.clone()),
+            None => message = msg::Message::Error(format!("timer {} does not exist", id)),
+        }
     } else {
-        message = msg::Message::Timer(timer.clone());
+        message = msg::Message::Error(format!("timer {} does not exist", id));
     }
 
     if let Err(_) = tx.send(message) {
