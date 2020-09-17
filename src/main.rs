@@ -1,11 +1,15 @@
 use std::error::Error;
 use std::result::Result;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 use std::vec::Vec;
 
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 // use tokio::time::delay_for;
 use tokio::sync::{mpsc, oneshot};
 use tokio::runtime;
+
+use timer::{Timer, TimerState};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut rt = runtime::Builder::new()
@@ -32,12 +36,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         // });
 
         let mut timers = Vec::new();
-        timers.push(Some(timer::Timer::new(0, String::from("default"), Duration::new(1 * 60, 0))));
+        timers.push(Some(Timer::new(0, String::from("default"), Duration::new(1 * 60, 0))));
 
         while let Some(msg) = rx.recv().await {
             match msg {
-                msg::Message::ListTimers(tx) => list_timers(tx, &timers),
-                msg::Message::GetTimer(tx, id) => get_timer(tx, &timers, id),
+                Message::ListTimers(tx) => list_timers(tx, &timers),
+                // msg::Message::GetTimer(tx, id) => get_timer(tx, &timers, id),
+                // msg::Message::SetTimerState(tx, id, state) => set_timer_state(tx, &mut timers, id, state),
                 _ => println!("main: unknown message"),
             }
         }
@@ -46,36 +51,140 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn list_timers(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>) {
+#[derive(Serialize)]
+pub struct TimerMessage {
+    id: u16,
+    name: String,
+    state: String,
+    duration_secs: u64,
+    elapsed_secs: u64,
+    interruptions: u16,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    start_time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    end_time: Option<String>,
+}
+
+impl TimerMessage {
+    fn from_timer(t: &Timer) -> Box<TimerMessage> {
+        let mut timer_msg = Box::new(TimerMessage{
+            id: t.id,
+            name: t.name.clone(),
+            state: t.state.to_string(),
+            duration_secs: t.duration.as_secs(),
+            elapsed_secs: t.elapsed.as_secs(),
+            interruptions: t.interruptions,
+            start_time: None,
+            end_time: None,
+        });
+
+        if t.start_time != SystemTime::UNIX_EPOCH {
+            let dt: DateTime<Utc> = DateTime::from(t.start_time);
+            timer_msg.start_time = Some(dt.to_rfc3339());
+        }
+
+        if t.end_time != SystemTime::UNIX_EPOCH {
+            let dt: DateTime<Utc> = DateTime::from(t.end_time);
+            timer_msg.end_time = Some(dt.to_rfc3339());
+        }
+
+        return timer_msg;
+    }
+}
+
+#[derive(Deserialize)]
+struct TimerUpdate {
+    name: Option<String>,
+    state: Option<TimerState>,
+    duration: Option<Duration>,
+}
+
+pub enum Message {
+    // requests
+    ListTimers(oneshot::Sender<Message>),
+    GetTimer(oneshot::Sender<Message>, u16),
+    // SetTimerName(Sender<Message>, u16, String),
+    // SetTimerState(Sender<Message>, u16, TimerState),
+    // SetTimerDuration(Sender<Message>, u16, u64),
+    // DeleteTimer(Sender<Message>, u16),
+    // CreateTimer{ tx: Sender<Message>, id: u16, duration_secs: u32},
+    // SetTimerState(Sender<Message>, u16, super::timer::TimerState),
+
+    // responses
+    Error(String),
+    Timers(Vec<Box<TimerMessage>>),
+    Timer(TimerMessage),
+}
+
+fn list_timers(tx: oneshot::Sender<Message>, timers: &Vec<Option<Timer>>) {
     let mut vec = Vec::new();
 
     for timer in timers {
         match timer {
-            Some(t) => vec.push(t.clone()),
+            Some(t) => vec.push(TimerMessage::from_timer(t)),
             None => (),
         }
     }
 
-    if let Err(_) = tx.send(msg::Message::Timers(vec)) {
+    if let Err(_) = tx.send(Message::Timers(vec)) {
         println!("error sending Timers message");
     }
 }
 
-fn get_timer(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>, id: u16) {
+// fn get_timer(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>, id: u16) {
+//     let message: msg::Message;
+
+//     if let Some(index) = timers.get(usize::from(id)).as_mut() {
+//         match index {
+//             Some(mut timer) => {
+//                 timer.tick();
+//                 message = msg::Message::Timer(timer.clone());
+//             }
+//             None => message = msg::Message::Error(format!("timer {} does not exist", id)),
+//         }
+//     } else {
+//         message = msg::Message::Error(format!("timer {} does not exist", id));
+//     }
+
+//     if let Err(_) = tx.send(message) {
+//         println!("error sending Timer message");
+//     }
+// }
+
+fn set_timer_state(tx: oneshot::Sender<msg::Message>, timers: &mut Vec<Option<timer::Timer>>, id: u16, state: timer::TimerState) {
     let message: msg::Message;
 
-    if let Some(index) = timers.get(usize::from(id)) {
-        match index {
-            Some(timer) => message = msg::Message::Timer(timer.clone()),
-            None => message = msg::Message::Error(format!("timer {} does not exist", id)),
-        }
-    } else {
-        message = msg::Message::Error(format!("timer {} does not exist", id));
-    }
+    let timer = timers[0].as_mut().unwrap();
+    timer.set_state(state).unwrap();
+
+    message = msg::Message::Timer(timer.clone());
 
     if let Err(_) = tx.send(message) {
         println!("error sending Timer message");
     }
+    // let ref mut x = timers.get(usize::from(id));
+    // match x {
+    //     Some(index) => {
+    //         match index {
+    //             Some(mut timer) => timer.set_state(state).unwrap(),
+    //             _ => (),
+    //         }
+    //     }
+    //     _ => (),
+    // }
+    // if let Some(ref index) = &timers.get(usize::from(id)) {
+    //     match index {
+    //         Some(mut timer) => {
+    //             if let Err(e) = timer.set_state(state) {
+    //                 message = msg::Message::Error(format!("failed to set timer state: {}", e));
+    //             }
+    //             message = msg::Message::Timer(timer.clone());
+    //         }
+    //         None => message = msg::Message::Error(format!("timer {} does not exist", id)),
+    //     }
+    // } else {
+    //     message = msg::Message::Error(format!("timer {} does not exist", id));
+    // }
 }
 
 //  _   _
@@ -97,12 +206,18 @@ mod timer {
         details: String,
     }
 
-    #[derive(Clone, Debug, PartialEq, serde::Serialize)]
+    #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
     pub enum TimerState {
         Initial,
         Running,
         Paused,
         Completed,
+    }
+
+    impl fmt::Display for TimerState {
+        fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "{:?}", self)
+        }
     }
 
     #[derive(Clone, Serialize)]
@@ -316,7 +431,7 @@ mod timer {
 
 mod http_api {
     use tokio::sync::mpsc::Sender;
-    use super::msg::Message;
+    use super::Message;
 
     pub async fn serve(chan: Sender<Message>) {
         let api = filters::tomayto(chan);
@@ -329,11 +444,12 @@ mod http_api {
         use tokio::sync::mpsc::Sender;
         use warp::Filter;
         use super::handlers;
-        use super::super::msg::Message;
+        use super::super::Message;
 
         pub fn tomayto(chan: Sender<Message>) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
             timers(chan.clone())
                 .or(timer(chan.clone()))
+                // .or(patch_timer(chan.clone()))
         }
 
         fn timers(chan: Sender<Message>) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
@@ -349,19 +465,29 @@ mod http_api {
                 .and(warp::any().map(move || chan.clone()))
                 .and_then(handlers::get_timer)
         }
+
+        // fn patch_timer(chan: Sender<Message>) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
+        //     warp::path!("timers" / u16)
+        //         .and(warp::patch())
+        //         .and(warp::body::json())
+        //         .and(warp::any().map(move || chan.clone()))
+        //         .and_then(handlers::patch_timer)
+        // }
     }
 
     mod handlers {
         use std::convert::Infallible;
+        use std::time::SystemTime;
 
-        use serde::Serialize;
+        use chrono::{DateTime, Utc};
+        use serde::{Deserialize, Serialize};
         use tokio::sync::mpsc::Sender;
         use tokio::sync::oneshot;
         use tokio::time::{Duration, timeout};
         use warp::http::StatusCode;
         use warp::reply;
 
-        use super::super::msg::Message;
+        use super::super::Message;
 
         #[derive(Serialize)]
         struct Error {
@@ -373,6 +499,75 @@ mod http_api {
                 reply::json(&Error{error: err})
             }
         }
+
+        #[derive(Serialize)]
+        struct TimerName {
+            id: u16,
+            name: String,
+        }
+
+        impl TimerName {
+            fn from_timer_msg(t: &super::super::TimerMessage) -> Box<TimerName> {
+                Box::new(TimerName{
+                    id: t.id,
+                    name: t.name.clone(),
+                })
+            }
+        }
+
+        #[derive(Deserialize)]
+        struct TimerCreate {
+            name: Option<String>,
+            duration: u64,
+        }
+
+        #[derive(Deserialize)]
+        pub struct TimerPatch {
+            name: Option<String>,
+            state: Option<super::super::timer::TimerState>,
+            duration: Option<u64>,
+        }
+
+        // #[derive(Serialize)]
+        // struct Timer {
+        //     id: u16,
+        //     name: String,
+        //     state: String,
+        //     duration_secs: u64,
+        //     elapsed_secs: u64,
+        //     interruptions: u16,
+        //     #[serde(skip_serializing_if = "Option::is_none")]
+        //     start_time: Option<String>,
+        //     #[serde(skip_serializing_if = "Option::is_none")]
+        //     end_time: Option<String>,
+        // }
+
+        // impl Timer {
+        //     fn from_internal(t: &super::super::timer::Timer) -> Box<Timer> {
+        //         let mut timer = Box::new(Timer{
+        //             id: t.id,
+        //             name: t.name.clone(),
+        //             state: t.state.to_string(),
+        //             duration_secs: t.duration.as_secs(),
+        //             elapsed_secs: t.elapsed.as_secs(),
+        //             interruptions: t.interruptions,
+        //             start_time: None,
+        //             end_time: None,
+        //         });
+
+        //         if t.start_time != SystemTime::UNIX_EPOCH {
+        //             let dt: DateTime<Utc> = DateTime::from(t.start_time);
+        //             timer.start_time = Some(dt.to_rfc3339());
+        //         }
+
+        //         if t.end_time != SystemTime::UNIX_EPOCH {
+        //             let dt: DateTime<Utc> = DateTime::from(t.end_time);
+        //             timer.end_time = Some(dt.to_rfc3339());
+        //         }
+
+        //         return timer;
+        //     }
+        // }
 
         pub async fn list_timers(mut chan: Sender<Message>) -> Result<impl warp::Reply, Infallible> {
             const TIMEOUT_MS:u64 = 250;
@@ -389,7 +584,12 @@ mod http_api {
                 Ok(msg) => {
                     match msg {
                         Ok(Message::Timers(timers)) => {
-                            let json = reply::json(&timers);
+                            let mut vec = Vec::new();
+                            for t in timers.iter() {
+                                let name = TimerName::from_timer_msg(&t);
+                                vec.push(name);
+                            }
+                            let json = reply::json(&vec);
                             return Ok(reply::with_status(json, StatusCode::OK));
                         }
                         Ok(Message::Error(err)) => {
@@ -425,6 +625,7 @@ mod http_api {
                 Ok(msg) => {
                     match msg {
                         Ok(Message::Timer(timer)) => {
+                            //let api_timer = Timer::from_timer_msg(&timer);
                             let json = reply::json(&timer);
                             return Ok(reply::with_status(json, StatusCode::OK));
                         }
@@ -445,6 +646,58 @@ mod http_api {
                 }
             }
         }
+
+        // pub async fn patch_timer(id: u16, timer: TimerPatch, mut chan: Sender<Message>) -> Result<impl warp::Reply, Infallible> {
+        //     const TIMEOUT_MS:u64 = 250;
+
+        //     let (tx, rx) = oneshot::channel::<Message>();
+
+        //     match timer.name {
+        //         Some(name) => println!("name = {}", name),
+        //         _ => (),
+        //     }
+
+        //     match timer.state {
+        //         Some(state) => {
+        //             if let Err(e) = chan.send(Message::SetTimerState(tx, id, state)).await {
+        //                 let json = Error::json(format!("failed to send message to main task: {}", e));
+        //                 return Ok(reply::with_status(json, StatusCode::INTERNAL_SERVER_ERROR));
+        //             }
+        //         }
+        //         _ => (),
+        //     }
+
+        //     match timer.duration {
+        //         Some(duration) => println!("duration = {}", duration),
+        //         _ => (),
+        //     }
+
+        //     match timeout(Duration::from_millis(TIMEOUT_MS), rx).await {
+        //         // got a message
+        //         Ok(msg) => {
+        //             match msg {
+        //                 Ok(Message::Timer(timer)) => {
+        //                     let api_timer = Timer::from_internal(&timer);
+        //                     let json = reply::json(&api_timer);
+        //                     return Ok(reply::with_status(json, StatusCode::ACCEPTED));
+        //                 }
+        //                 Ok(Message::Error(err)) => {
+        //                     let json = Error::json(err);
+        //                     return Ok(reply::with_status(json, StatusCode::INTERNAL_SERVER_ERROR));
+        //                 }
+        //                 _ => {
+        //                     let json = Error::json(format!("received unexpected message type from main task"));
+        //                     return Ok(reply::with_status(json, StatusCode::INTERNAL_SERVER_ERROR));
+        //                 }
+        //             }
+        //         }
+        //         // timed out waiting for message
+        //         Err(_) => {
+        //             let json = Error::json(format!("did not receive message from main task withn {}ms timeout", TIMEOUT_MS));
+        //             return Ok(reply::with_status(json, StatusCode::INTERNAL_SERVER_ERROR));
+        //         }
+        //     }
+        // }
     }
 }
 
@@ -456,6 +709,9 @@ mod msg {
         // requests
         ListTimers(Sender<Message>),
         GetTimer(Sender<Message>, u16),
+        SetTimerName(Sender<Message>, u16, String),
+        SetTimerState(Sender<Message>, u16, super::timer::TimerState),
+        SetTimerDuration(Sender<Message>, u16, u64),
         // DeleteTimer(Sender<Message>, u16),
         // CreateTimer{ tx: Sender<Message>, id: u16, duration_secs: u32},
         // SetTimerState(Sender<Message>, u16, super::timer::TimerState),
