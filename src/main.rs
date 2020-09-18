@@ -36,12 +36,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         // });
 
         let mut timers = Vec::new();
-        timers.push(Some(Timer::new(0, String::from("default"), Duration::new(1 * 60, 0))));
+        timers.push(Some(Box::new(Timer::new(0, String::from("default"), Duration::new(1 * 60, 0)))));
 
         while let Some(msg) = rx.recv().await {
             match msg {
                 Message::ListTimers(tx) => list_timers(tx, &timers),
-                // msg::Message::GetTimer(tx, id) => get_timer(tx, &timers, id),
+                Message::GetTimer(tx, id) => {
+                    let mut index = timers[id as usize].as_mut();
+                    get_timer(tx, id, &mut index);
+                    // match index {
+                    //     Some(timer) => {
+                    //         timer.tick();
+                    //         get_timer(tx, id, timer);
+                    //     },
+                    //     None => (),
+                    // }
+                },
+                Message::UpdateTimer(tx, id, update) => {
+                    let ref mut timer = timers[id as usize];
+                }
                 // msg::Message::SetTimerState(tx, id, state) => set_timer_state(tx, &mut timers, id, state),
                 _ => println!("main: unknown message"),
             }
@@ -93,7 +106,7 @@ impl TimerMessage {
 }
 
 #[derive(Deserialize)]
-struct TimerUpdate {
+pub struct TimerUpdate {
     name: Option<String>,
     state: Option<TimerState>,
     duration: Option<Duration>,
@@ -103,6 +116,7 @@ pub enum Message {
     // requests
     ListTimers(oneshot::Sender<Message>),
     GetTimer(oneshot::Sender<Message>, u16),
+    UpdateTimer(oneshot::Sender<Message>, u16, Box<TimerUpdate>),
     // SetTimerName(Sender<Message>, u16, String),
     // SetTimerState(Sender<Message>, u16, TimerState),
     // SetTimerDuration(Sender<Message>, u16, u64),
@@ -113,10 +127,10 @@ pub enum Message {
     // responses
     Error(String),
     Timers(Vec<Box<TimerMessage>>),
-    Timer(TimerMessage),
+    Timer(Box<TimerMessage>),
 }
 
-fn list_timers(tx: oneshot::Sender<Message>, timers: &Vec<Option<Timer>>) {
+fn list_timers(tx: oneshot::Sender<Message>, timers: &Vec<Option<Box<Timer>>>) {
     let mut vec = Vec::new();
 
     for timer in timers {
@@ -131,37 +145,34 @@ fn list_timers(tx: oneshot::Sender<Message>, timers: &Vec<Option<Timer>>) {
     }
 }
 
-// fn get_timer(tx: oneshot::Sender<msg::Message>, timers: &Vec<Option<timer::Timer>>, id: u16) {
-//     let message: msg::Message;
+fn get_timer(tx: oneshot::Sender<Message>, id: u16, opt: &mut Option<Box<Timer>>) {
+    let message: Message;
+    // message = Message::Timer(TimerMessage::from_timer(&timer));
 
-//     if let Some(index) = timers.get(usize::from(id)).as_mut() {
-//         match index {
-//             Some(mut timer) => {
-//                 timer.tick();
-//                 message = msg::Message::Timer(timer.clone());
-//             }
-//             None => message = msg::Message::Error(format!("timer {} does not exist", id)),
-//         }
-//     } else {
-//         message = msg::Message::Error(format!("timer {} does not exist", id));
-//     }
-
-//     if let Err(_) = tx.send(message) {
-//         println!("error sending Timer message");
-//     }
-// }
-
-fn set_timer_state(tx: oneshot::Sender<msg::Message>, timers: &mut Vec<Option<timer::Timer>>, id: u16, state: timer::TimerState) {
-    let message: msg::Message;
-
-    let timer = timers[0].as_mut().unwrap();
-    timer.set_state(state).unwrap();
-
-    message = msg::Message::Timer(timer.clone());
+    match opt {
+        Some(mut timer) => {
+            timer.tick();
+            message = Message::Timer(TimerMessage::from_timer(&timer));
+        },
+        None => message = Message::Error(format!("timer {} does not exist", id)),
+    }
 
     if let Err(_) = tx.send(message) {
         println!("error sending Timer message");
     }
+}
+
+// fn set_timer_state(tx: oneshot::Sender<msg::Message>, timers: &mut Vec<Option<timer::Timer>>, id: u16, state: timer::TimerState) {
+//     let message: msg::Message;
+
+//     let timer = timers[0].as_mut().unwrap();
+//     timer.set_state(state).unwrap();
+
+//     message = msg::Message::Timer(timer.clone());
+
+//     if let Err(_) = tx.send(message) {
+//         println!("error sending Timer message");
+//     }
     // let ref mut x = timers.get(usize::from(id));
     // match x {
     //     Some(index) => {
@@ -185,7 +196,7 @@ fn set_timer_state(tx: oneshot::Sender<msg::Message>, timers: &mut Vec<Option<ti
     // } else {
     //     message = msg::Message::Error(format!("timer {} does not exist", id));
     // }
-}
+// }
 
 //  _   _
 // | |_(_)_ __ ___   ___ _ __
@@ -698,27 +709,5 @@ mod http_api {
         //         }
         //     }
         // }
-    }
-}
-
-mod msg {
-    use std::vec::Vec;
-    use tokio::sync::oneshot::Sender;
-
-    pub enum Message {
-        // requests
-        ListTimers(Sender<Message>),
-        GetTimer(Sender<Message>, u16),
-        SetTimerName(Sender<Message>, u16, String),
-        SetTimerState(Sender<Message>, u16, super::timer::TimerState),
-        SetTimerDuration(Sender<Message>, u16, u64),
-        // DeleteTimer(Sender<Message>, u16),
-        // CreateTimer{ tx: Sender<Message>, id: u16, duration_secs: u32},
-        // SetTimerState(Sender<Message>, u16, super::timer::TimerState),
-
-        // responses
-        Error(String),
-        Timers(Vec<super::timer::Timer>),
-        Timer(super::timer::Timer),
     }
 }
